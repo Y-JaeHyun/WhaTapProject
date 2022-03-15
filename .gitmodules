@@ -1,0 +1,3 @@
+[submodule "CAgent/iniParser"]
+	path = CAgent/iniParser
+	url = https://github.com/rxi/ini
