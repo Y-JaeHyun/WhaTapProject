@@ -1,20 +1,30 @@
 CC = gcc
-DEFS = -i./
-LIBS = -ldl
-CFLAGS = -g -Wall
+LIBS = ./fileSend/libfile.a ./lib/libstd.a -lcurl
+CFLAGS = -g -Wall -I./fileSend -I./iniParser/src -I./lib
 #EXTRALIBS = 
 
-OBJS = agent.o
+OBJS = agent.o iniParser/src/ini.o
 TARGET = agent
 
-all: $(TARGET)
+SUBDIRS = fileSend lib
+
+all: $(OBJS) $(TARGET)
 
 clean:
+	for DIRS in $(SUBDIRS);do\
+		$(MAKE) -C $$DIRS clean;\
+	done
 	rm -f *.o
 	rm -f $(TARGET)
 
 
-$(TARGET): $(OBJS)
-	$(CC) -o $@ $(OBJS)
+%.o: %.c $(DEFS)
+	$(CC) $(CFLAGS) -c $< -o $@ 
 
-#$(EXTRALIBS) $(DEFS) $(LIBS)
+agent: agent.o
+	for DIRS in $(SUBDIRS);do\
+		$(MAKE) -C $$DIRS;\
+	done
+	$(CC) -o $@ $(OBJS) $(LIBS)
+
+

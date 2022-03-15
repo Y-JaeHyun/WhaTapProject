@@ -3,17 +3,26 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <time.h>
 
 #include "agent.h"
+#include "fileSend.h"
+#include "ini.h"
+#include "list.h"
 
-int getPID(ProcessInfo *pInfo, char *processName) {
+#define HEADFORMAT "time%cprocess%cpid%ccpuUsage%cmemory\n"
+#define CSVFORMAT "%ld%c%s%c%d%c%lf%c%llu\n"
+
+int getPID(List_t *list, const char *processName) {
 	char cmd[MAX_BUFF] = {0, };
 	char buf[MAX_BUFF] = {0, };
 	FILE *fp;
-	int i = 0;
 	char *token;
 	
+	if (list == NULL) return FAIL;
+
 	snprintf(cmd, MAX_BUFF, "pidof %s", processName);
 	if ((fp = popen(cmd, "r")) == NULL ) {
 		return FAIL;
@@ -25,87 +34,198 @@ int getPID(ProcessInfo *pInfo, char *processName) {
 
 	token = strtok(buf, " ");
 	while (token != NULL) {
-		if (i >= CHECK_LIMIT) break;
-		pInfo[i].pid = atoi(token);
-		snprintf(pInfo[i].pName, sizeof(pInfo[i].pName), "%s", processName);
+		ProcessInfo pInfo = {0, };
+		pInfo.pid = atoi(token);
+		snprintf(pInfo.pName, sizeof(pInfo.pName), "%s", processName);
+		appendList(list, &pInfo);
 		token = strtok(NULL, " ");
-		i++;
 	}
 	return SUCCESS;
 }
 
-int getMemory(ProcessInfo *pInfo) {
+uint64_t getCPUTotalUsed() {
 	char cmd[MAX_BUFF] = {0, };
 	char buf[MAX_BUFF] = {0, };
 	FILE *fp;
-	snprintf(cmd, MAX_BUFF, "cat /proc/%d/stat | awk -F')' '{print$2}' | awk '{print $22}'", pInfo->pid);
+	char *pos = NULL;
+	snprintf(cmd, MAX_BUFF, "cat /proc/stat | head -n 1 |awk '{print $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9 + $10 + $11}'");
 	if ((fp = popen(cmd, "r")) == NULL ) {
 		return FAIL;
 	}
 	fgets(buf, MAX_BUFF, fp);
 	pclose(fp);
 
+	strtoll(buf, &pos, 10);
 
-	pInfo->memoryByte = atoi(buf) * getpagesize();
-	return SUCCESS;
-
+	return strtoll(buf, &pos, 10);;
 }
 
-int getCPU(ProcessInfo *pInfo) {
+int getStatInfo(ProcessInfo *pInfo) {
 	char cmd[MAX_BUFF] = {0, };
 	char buf[MAX_BUFF] = {0, };
 	FILE *fp;
-	snprintf(cmd, MAX_BUFF, "cat /proc/%d/stat | awk '{print $14+ $15}'", pInfo->pid);
+	char *pos, *token;
+
+	snprintf(cmd, MAX_BUFF, "cat /proc/%d/stat | awk -F')' '{print$2}' | awk '{print $22 \" \" $12 + $13 + $14 + $15}'", pInfo->pid);
 	if ((fp = popen(cmd, "r")) == NULL ) {
 		return FAIL;
 	}
 	fgets(buf, MAX_BUFF, fp);
 	pclose(fp);
 
-	pInfo->cpuUsed = atoi(buf);
+	token = strtok(buf, " ");
+	if (token == NULL) return FAIL;
+	pInfo->memoryByte = atoi(token) * getpagesize();
+
+	token = strtok(NULL, " ");
+	if (token == NULL) return FAIL;
+	pInfo->cpuUsed = strtoll(token, &pos, 10);
 
 	return SUCCESS;
-	
 }
 
-void printProcessInfo(ProcessInfo *pInfo) {
-	int i = 0;
-	for (; i < CHECK_LIMIT; i++) {
-		if (pInfo[i].pid == 0) return;
-		printf("==================================\n");
-		printf("process Name : %s\n", pInfo[i].pName);
-		printf("process ID : %d\n", pInfo[i].pid);
-		printf("process CPU Used : %d\n", pInfo[i].cpuUsed);
-		printf("process CPU Usage : %lf\n", pInfo[i].cpuUsage);
-		printf("process RSS : %llu\n",  pInfo[i].memoryByte);
-		printf("==================================\n");
+
+int appendProcessFunc(void *node, void *data, size_t size) {
+	memcpy(node, data, size);
+	return 0;
+}
+
+int compFunc(void *node, void *data) {
+	ProcessInfo *pInfo = (ProcessInfo *)data;
+	ProcessInfo *beforeInfo = (ProcessInfo *)node;
+	if (pInfo->pid == beforeInfo->pid) return 1;
+	return 0;
+}
+
+
+int getProcessStat(void *node, void *etc) {
+	ProcessInfo *pInfo = (ProcessInfo *)node;
+	if (pInfo->pid ==0) return FAIL;
+	getStatInfo(pInfo);
+
+	return SUCCESS;
+}
+
+// 정리 필요
+typedef struct etc {
+	List_t *beforeList;
+	time_t time;
+	uint64_t totalCpuUsed;
+	long number_of_processors;
+	char separator;
+	FILE *fp;
+}ETC;
+
+int printProcessStat(void *node, void *etc) {
+	ProcessInfo *pInfo = (ProcessInfo *)node;
+	ETC *etcInfo = (ETC *)etc;
+	ProcessInfo *beforeInfo = searchNode(etcInfo->beforeList, node);
+	uint64_t processCpuUsed;
+	char separator = etcInfo->separator;
+
+	if (beforeInfo) {
+		processCpuUsed = pInfo->cpuUsed - beforeInfo->cpuUsed;
+	} else {
+		processCpuUsed = pInfo->cpuUsed;
 	}
+	pInfo->cpuUsage = ((double)processCpuUsed) / etcInfo->totalCpuUsed * 100.0 * etcInfo->number_of_processors;
+
+	fprintf(etcInfo->fp, CSVFORMAT,
+			etcInfo->time, separator,
+			pInfo->pName, separator,
+			pInfo->pid, separator,
+			pInfo->cpuUsage, separator,
+			pInfo->memoryByte); 
+	return SUCCESS;
 }
-
-
-
 
 int main () {
-	ProcessInfo pInfo[10] = {0, }; // TODO Dynamic 
-	time_t t;
-	struct tm *tm;
+	List_t *list[2] = {0, }; // before, now
+	int index = 0;
+	ETC etc = {0, };
+	etc.number_of_processors = sysconf(_SC_NPROCESSORS_ONLN);
+	uint64_t nowCpuTotalUsed;
+	uint64_t beforeCpuTotalUsed = 0;
+
+	ini_t *config = ini_load("config/config.ini");
+
+	const char *url = ini_get(config, "server", "url");
+	const char *fileSavePath = ini_get(config, "agent", "fileSavePath");
+	const char *fileName = ini_get(config, "agent", "fileName");
+	const char *processName = ini_get(config, "agent", "process");
+
+	char fileFullName[128] = {0, };
+	char buff[2][32] = {{0, }, };
+	int sleepTime;
+	int min;
+	ini_sget(config, "agent", "separator", "'%c'", &etc.separator);
+	ini_sget(config, "agent", "sleep", "%d", &sleepTime);
+	ini_sget(config, "agent", "min", "%d", &min);
+
+	ini_free(config);
+
 	while (1) {
-		int i = 0;
-		t = time(NULL);
-		tm = localtime(&t);
-		printf("%s\n", asctime(tm));
-		if (getPID(pInfo, "tmux") == FAIL) {
+		if (list[index] == NULL) {
+			list[index] = initList(sizeof(ProcessInfo), appendProcessFunc, compFunc);
+		}
+
+		etc.beforeList = list[!index];
+		etc.time = time(NULL);
+
+		if (getPID(list[index], processName) == FAIL) {
 			printf("PID GET ERROR\n");
 		}
 
-		for (; i < CHECK_LIMIT; i++) {
-			if (pInfo[i].pid ==0) break;
-			getMemory(&pInfo[i]);
+		if ((nowCpuTotalUsed = getCPUTotalUsed()) == FAIL) {
+			printf("CPU TOTAL USED ERROR\n");
+		}
+		etc.totalCpuUsed = nowCpuTotalUsed - beforeCpuTotalUsed;
+		beforeCpuTotalUsed = nowCpuTotalUsed;
+
+		if (circuitList(list[index], getProcessStat, NULL) == FAIL) {
+			printf("Process Stat GET ERROR\n");
+		}
+	
+		mkdir(fileSavePath, 0777);
+
+
+		if (min == 0) {
+			strftime(buff[index], sizeof(buff[index]), "%Y%m%d", localtime(&etc.time));
+			if (strncmp(buff[index], buff[!index], strlen(buff[index])) != 0) {
+				if (strlen(fileFullName) != 0) {
+					sendFile(url,fileFullName);
+				}
+				snprintf(fileFullName, sizeof(fileFullName), "%s/%s%s.csv", fileSavePath, fileName, buff[index]);
+			}
+		} else {
+			strftime(buff[index], sizeof(buff[index]), "%Y%m%d%H%M", localtime(&etc.time));
+			if (strncmp(buff[index], buff[!index], strlen(buff[index])) != 0) {
+				if (strlen(fileFullName) != 0) {
+					sendFile(url,fileFullName);
+				}
+				snprintf(fileFullName, sizeof(fileFullName), "%s/%s%s.csv", fileSavePath, fileName, buff[index]);
+			}
+
+		}
+		if (access(fileFullName, F_OK) != 0) {
+			etc.fp = fopen(fileFullName, "w");
+			fprintf(etc.fp, HEADFORMAT, etc.separator, etc.separator, etc.separator, etc.separator);
+		} else {
+			etc.fp = fopen(fileFullName, "a");
 		}
 
-		printProcessInfo(pInfo);
-		memset(pInfo, '\0', sizeof(ProcessInfo) * 10);
-		sleep(20);
+		if (circuitList(list[index], printProcessStat, &etc) == FAIL) {
+			printf("Process Stat Print ERROR\n");
+		}
+
+		fclose(etc.fp);
+
+		index = !index;
+
+		destroyList(list[index]);
+		list[index] = NULL;
+
+		sleep(sleepTime);
 	}
 	return SUCCESS;
 	
