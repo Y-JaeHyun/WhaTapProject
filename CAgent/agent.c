@@ -6,6 +6,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
+#include <fcntl.h>
+#include <dirent.h>
 
 #include "agent.h"
 #include "fileSend.h"
@@ -15,6 +17,7 @@
 #define HEADFORMAT "time%cprocess%cpid%ccpuUsage%cmemory\n"
 #define CSVFORMAT "%ld%c%s%c%d%c%lf%c%llu\n"
 
+#if 0
 int getPID(List_t *list, const char *processName) {
 	char cmd[MAX_BUFF] = {0, };
 	char buf[MAX_BUFF] = {0, };
@@ -42,6 +45,41 @@ int getPID(List_t *list, const char *processName) {
 	}
 	return SUCCESS;
 }
+#else 
+
+int getPID(List_t *list, const char *processName) {
+	DIR *dir;
+	struct dirent *dir_entry;
+	char cmd[MAX_BUFF] = {0, };
+	char buf[MAX_BUFF] = {0, };
+	FILE *fp;
+
+	dir = opendir("/proc/");
+
+	//  보다는 readlink가 좋을것 같은데 권한등에 의해 못보는 케이스 존재
+	while (NULL != (dir_entry = readdir(dir))) {
+		if (strspn(dir_entry->d_name, "0123456789") == strlen(dir_entry->d_name)) { // pid directory
+			snprintf(cmd, MAX_BUFF, "cat /proc/%s/comm 2>/dev/null", dir_entry->d_name);
+			if ((fp = popen(cmd, "r")) == NULL) {
+				return FAIL;
+			}
+			fgets(buf, MAX_BUFF, fp);
+			pclose(fp);
+
+			if (strlen(processName) != strlen(buf) - 1 || strncmp(processName, buf, strlen(processName)) != 0) continue;
+
+			ProcessInfo pInfo = {0, };
+			pInfo.pid = atoi(dir_entry->d_name);
+			snprintf(pInfo.pName, sizeof(pInfo.pName), "%s", processName);
+			appendList(list, &pInfo);
+
+		}
+	}
+	return SUCCESS;
+
+}
+
+#endif 
 
 uint64_t getCPUTotalUsed() {
 	char cmd[MAX_BUFF] = {0, };
