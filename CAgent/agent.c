@@ -104,7 +104,7 @@ int getStatInfo(ProcessInfo *pInfo) {
 	FILE *fp;
 	char *pos, *token;
 
-	snprintf(cmd, MAX_BUFF, "cat /proc/%d/stat | awk -F')' '{print$2}' | awk '{print $22 \" \" $12 + $13 + $14 + $15}'", pInfo->pid);
+	snprintf(cmd, MAX_BUFF, "cat /proc/%d/stat | awk -F')' '{print$2}' | awk '{print $2 \" \" $20 \" \" $22 \" \" $12 + $13 + $14 + $15}'", pInfo->pid);
 	if ((fp = popen(cmd, "r")) == NULL ) {
 		return FAIL;
 	}
@@ -112,6 +112,15 @@ int getStatInfo(ProcessInfo *pInfo) {
 	pclose(fp);
 
 	token = strtok(buf, " ");
+	if (token == NULL) return FAIL;
+	pInfo->ppid = atoi(token);
+
+
+	token = strtok(NULL, " ");
+	if (token == NULL) return FAIL;
+	pInfo->starttime = strtoll(token, &pos, 10);
+
+	token = strtok(NULL, " ");
 	if (token == NULL) return FAIL;
 	pInfo->memoryByte = atoi(token) * getpagesize();
 
@@ -182,6 +191,7 @@ int main () {
 	int index = 0;
 	ETC etc = {0, };
 	etc.number_of_processors = sysconf(_SC_NPROCESSORS_ONLN);
+	//sysconf(_SC_CLK_TCK);
 	uint64_t nowCpuTotalUsed;
 	uint64_t beforeCpuTotalUsed = 0;
 
@@ -229,22 +239,17 @@ int main () {
 
 		if (min == 0) {
 			strftime(buff[index], sizeof(buff[index]), "%Y%m%d", localtime(&etc.time));
-			if (strncmp(buff[index], buff[!index], strlen(buff[index])) != 0) {
-				if (strlen(fileFullName) != 0) {
-					sendFile(url,fileFullName);
-				}
-				snprintf(fileFullName, sizeof(fileFullName), "%s/%s%s.csv", fileSavePath, fileName, buff[index]);
-			}
 		} else {
 			strftime(buff[index], sizeof(buff[index]), "%Y%m%d%H%M", localtime(&etc.time));
-			if (strncmp(buff[index], buff[!index], strlen(buff[index])) != 0) {
-				if (strlen(fileFullName) != 0) {
-					sendFile(url,fileFullName);
-				}
-				snprintf(fileFullName, sizeof(fileFullName), "%s/%s%s.csv", fileSavePath, fileName, buff[index]);
-			}
-
 		}
+
+		if (strncmp(buff[index], buff[!index], strlen(buff[index])) != 0) {
+			if (strlen(fileFullName) != 0) {
+				sendFile(url,fileFullName);
+			}
+			snprintf(fileFullName, sizeof(fileFullName), "%s/%s%s.csv", fileSavePath, fileName, buff[index]);
+		}
+
 		if (access(fileFullName, F_OK) != 0) {
 			etc.fp = fopen(fileFullName, "w");
 			fprintf(etc.fp, HEADFORMAT, etc.separator, etc.separator, etc.separator, etc.separator);

@@ -11,10 +11,12 @@ enum {
 
 typedef struct processInfo {
 	int pid;
+	int ppid;
 	char pName[NAME_LEN];
 	uint32_t cpuUsed;
 	double cpuUsage;
 	uint64_t memoryByte; //rss	
+	uint64_t starttime;
 }ProcessInfo;
 
 
