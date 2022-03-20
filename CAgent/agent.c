@@ -8,6 +8,7 @@
 #include <time.h>
 #include <fcntl.h>
 #include <dirent.h>
+#include <pwd.h>
 
 #include "agent.h"
 #include "fileSend.h"
@@ -168,6 +169,8 @@ int getStatInfo(ProcessInfo *pInfo) {
 	char fileName[MAX_BUFF] = {0, };
 	FILE *fp;
 	struct pstat stat = {0, };
+	int uid = -1;
+	struct passwd *pws;
 
 	snprintf(fileName, MAX_BUFF, "/proc/%d/stat", pInfo->pid);
 	if ((fp = fopen(fileName, "r")) == NULL) {
@@ -188,6 +191,18 @@ int getStatInfo(ProcessInfo *pInfo) {
 	pInfo->starttime = stat.starttime;
 	pInfo->memoryByte = stat.rss * getpagesize();
 	pInfo->cpuUsed = stat.utime_ticks + stat.stime_ticks + stat.cutime_ticks + stat.cstime_ticks;
+
+	snprintf(fileName, MAX_BUFF, "/proc/%d/status", pInfo->pid);
+	if ((fp = fopen(fileName, "r")) == NULL) {
+		return FAIL;
+	}
+
+	fscanf(fp, "%*[^\n] %*[^\n] %*[^\n] %*[^\n] %*[^\n] %*[^\n] %*[^\n] %*[^\n] " //8 line skip
+			"Uid:\t%d\t", &uid);
+	fclose(fp);
+
+	pws = getpwuid(uid);
+	snprintf(pInfo->userName, sizeof(pInfo->userName), "%s", pws->pw_name);
 
 	return SUCCESS;
 }
@@ -336,6 +351,7 @@ int printProcessStat(void *node, void *etc) {
 	cData.createtime = &pInfo->starttime;
 	cData.ctimeStr = pInfo->startString;
 	cData.cmd2 = pInfo->cmd2;
+	cData.uName = pInfo->userName;
 
 	printCSVData(etcInfo->fp, separator);
 	return SUCCESS;

@@ -23,6 +23,7 @@ typedef struct processInfo {
 	uint64_t memoryByte; //rss	
 	time_t starttime;
 	char startString[DATE_BUFF];
+	char userName[NAME_LEN];
 }ProcessInfo;
 
 struct csvFormat {
@@ -53,6 +54,7 @@ struct csvData {
 	int *ppid;
 	double *cpuUsage;
 	uint64_t *memory;
+	char *uName;
 	//char cmd1[NAME_LEN];
 	//char cmd2[NAME_LEN];
 	//IOPS
@@ -69,6 +71,7 @@ struct csvFormat CSVFORMAT[] = {
 	{"CMD2", STRING, &cData.cmd2},
 	{"pid", INT, &cData.pid},
 	{"ppid", INT, &cData.ppid},
+	{"user", STRING, &cData.uName},
 	{"cpuUsage", DOUBLE, &cData.cpuUsage},
 	{"memory", LONG_LONG_INT, &cData.memory}, 
 	{"IOPS", NOT_SUPPORT, NULL},
