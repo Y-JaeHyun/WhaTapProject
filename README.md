@@ -6,3 +6,9 @@
   * git submodule init
   * git submodule update
   * cd cAgent; make;
+
+* fileServer 
+  * sudo pip install flask
+
+* Test 환경
+  * 데비안10 (Kernal 5.10.17)
