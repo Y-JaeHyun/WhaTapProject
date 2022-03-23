@@ -14,16 +14,21 @@ enum {
 };
 
 typedef struct processInfo {
+	int check;
 	int pid;
 	int ppid;
 	char pName[NAME_LEN];
 	char cmd2[NAME_LEN];
 	uint32_t cpuUsed;
-	double cpuUsage;
+	uint32_t beforeCpuUsed;
 	uint64_t memoryByte; //rss	
 	time_t starttime;
 	char startString[DATE_BUFF];
 	char userName[NAME_LEN];
+	uint64_t readByte;
+	uint64_t writeByte;
+	uint64_t beforeReadByte;
+	uint64_t beforeWriteByte;
 }ProcessInfo;
 
 struct csvFormat {
@@ -55,10 +60,11 @@ struct csvData {
 	double *cpuUsage;
 	uint64_t *memory;
 	char *uName;
-	//char cmd1[NAME_LEN];
-	//char cmd2[NAME_LEN];
-	//IOPS
-	//BPS
+	double *readIOPS;
+	double *writeIOPS;
+	double *readBPS;
+	double *writeBPS;
+	uint64_t *tt;
 };
 
 struct csvData cData = {0, };
@@ -74,8 +80,10 @@ struct csvFormat CSVFORMAT[] = {
 	{"user", STRING, &cData.uName},
 	{"cpuUsage", DOUBLE, &cData.cpuUsage},
 	{"memory", LONG_LONG_INT, &cData.memory}, 
-	{"IOPS", NOT_SUPPORT, NULL},
-	{"BPS", NOT_SUPPORT, NULL},
+	{"Read IOPS", DOUBLE, &cData.readIOPS},
+	{"Write IOPS", DOUBLE, &cData.writeIOPS},
+	{"Read BPS", DOUBLE, &cData.readBPS},
+	{"Write BPS", DOUBLE, &cData.writeBPS},
 };
 
 

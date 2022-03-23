@@ -12,6 +12,14 @@ def render_file():
     print ("upload.html")
     return render_template('/backup/wogus3314/github/WhaTapProject/fileServer/upload.html')
 
+@app.route('/realtimeUpload', methods = ['POST'])
+def realtime_upload():
+    if request.method == 'POST':
+        with open('backup.csv', "a") as file:
+            file.write(request.form['data'])
+            
+        return ''
+
 @app.route('/uploader', methods = ['GET', 'POST'])
 def upload_file():
     if request.method == 'POST':

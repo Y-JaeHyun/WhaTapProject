@@ -13,21 +13,32 @@
 #include "agent.h"
 #include "fileSend.h"
 #include "ini.h"
-#include "list.h"
+//#include "list.h"
+#include "linkedList.h"
 
+#include <linux/fs.h>
+#include <sys/ioctl.h>
 
 #define CSV_HEAD_LEN 32
 
-void ProcessSet(List_t *list, int pid, const char *processName, const char *cmd2) {
+void ProcessSet(LinkedList_t *list, int pid, const char *processName, const char *cmd2) {
 	ProcessInfo pInfo = {0, };
+	ProcessInfo *searchInfo; 
 	pInfo.pid = pid;
-	snprintf(pInfo.pName, sizeof(pInfo.pName), "%s", processName);
-	if (cmd2 != NULL) 
-		snprintf(pInfo.cmd2, sizeof(pInfo.cmd2), "%s", cmd2);
-	else 
-		pInfo.cmd2[0] = '\0';
-	getStatInfo(&pInfo);
-	appendList(list, &pInfo);
+	
+	if ((searchInfo = searchNodeData(list, &pInfo)) == NULL) {
+		snprintf(pInfo.pName, sizeof(pInfo.pName), "%s", processName);
+
+		if (cmd2 != NULL) 
+			snprintf(pInfo.cmd2, sizeof(pInfo.cmd2), "%s", cmd2);
+		else 
+			pInfo.cmd2[0] = '\0';
+		pInfo.readByte= -1;
+		pInfo.writeByte = -1;
+		searchInfo = appendLinkedList(list, &pInfo);
+	}
+	searchInfo->check = 1;
+	getStatInfo(searchInfo);
 }
 
 /*
@@ -37,7 +48,7 @@ void ProcessSet(List_t *list, int pid, const char *processName, const char *cmd2
  * 3. /proc/PID/exe symlink. Points to the running executable file.
  */
 
-int getProcessInfo(List_t *list, const char *processName) {
+int getProcessInfo(LinkedList_t *list, const char *processName) {
 	DIR *dir;
 	struct dirent *dir_entry;
 	char fileName[MAX_BUFF] = {0, };
@@ -190,6 +201,7 @@ int getStatInfo(ProcessInfo *pInfo) {
 	pInfo->ppid = stat.ppid;
 	pInfo->starttime = stat.starttime;
 	pInfo->memoryByte = stat.rss * getpagesize();
+	pInfo->beforeCpuUsed = pInfo->cpuUsed;
 	pInfo->cpuUsed = stat.utime_ticks + stat.stime_ticks + stat.cutime_ticks + stat.cstime_ticks;
 
 	snprintf(fileName, MAX_BUFF, "/proc/%d/status", pInfo->pid);
@@ -203,6 +215,23 @@ int getStatInfo(ProcessInfo *pInfo) {
 
 	pws = getpwuid(uid);
 	snprintf(pInfo->userName, sizeof(pInfo->userName), "%s", pws->pw_name);
+
+	snprintf(fileName, MAX_BUFF, "/proc/%d/io", pInfo->pid);
+	if ((fp = fopen(fileName, "r")) == NULL) {
+		printf("Check Permission Denied!\n");
+		pInfo->beforeReadByte = -1;
+		pInfo->beforeWriteByte = -1;
+		exit (1);
+	}
+
+	pInfo->beforeReadByte = pInfo->readByte;
+	pInfo->beforeWriteByte = pInfo->writeByte;
+
+	fscanf(fp, "%*[^\n] %*[^\n] %*[^\n] %*[^\n] "
+			"read_bytes: %llu "
+			"write_bytes: %llu", &pInfo->readByte, &pInfo->writeByte);
+	fclose(fp);
+
 
 	return SUCCESS;
 }
@@ -222,7 +251,7 @@ int compFunc(void *node, void *data) {
 
 // 정리 필요
 typedef struct etc {
-	List_t *beforeList;
+	//LinkList_t *beforeList;
 	time_t time;
 	time_t uptime;
 	uint64_t totalCpuUsed;
@@ -230,6 +259,9 @@ typedef struct etc {
 	char separator;
 	FILE *fp;
 	long clk_tick;
+	const char *url;
+	int sleepTime;
+	double blockSize;
 }ETC;
 
 
@@ -251,7 +283,7 @@ int printCSVHead(FILE *fp, char separator) {
 }
 
 
-int printCSVData(FILE *fp, char separator) {
+int printCSVData(FILE *fp, const char * url, char separator) {
 	char csv[MAX_BUFF] = {0, };
 	int i = 0;
 	int len = sizeof(CSVFORMAT) / sizeof(struct csvFormat);
@@ -315,6 +347,7 @@ int printCSVData(FILE *fp, char separator) {
 
 #if 1
 	fprintf(fp, "%s", csv);
+	sendRealTime(url, csv);
 
 #else  //TEST
 
@@ -325,40 +358,71 @@ int printCSVData(FILE *fp, char separator) {
 	return SUCCESS;
 
 }
-
-int printProcessStat(void *node, void *etc) {
-	ProcessInfo *pInfo = (ProcessInfo *)node;
+int printProcessStat(LinkedList_t *list, void *node, void *etc) {
+	Node *temp = (Node *)node;
+	ProcessInfo *pInfo = (ProcessInfo *)temp->data;
 	ETC *etcInfo = (ETC *)etc;
-	ProcessInfo *beforeInfo = searchNode(etcInfo->beforeList, node);
 	uint64_t processCpuUsed;
 	char separator = etcInfo->separator;
+	double cpuUsage = 0;
+	double readBPS = 0;
+	double writeBPS = 0;
+	double readIOPS = 0;
+	double writeIOPS = 0;
 
-	if (beforeInfo) {
-		processCpuUsed = pInfo->cpuUsed - beforeInfo->cpuUsed;
-	} else {
-		processCpuUsed = pInfo->cpuUsed;
+	if (pInfo->check == 0) { // 없어진 PID
+		if (list->head == temp) {
+			list->head = temp->next;
+			if (list->head)
+				list->head->prev = NULL;
+		} else {
+			temp->prev->next = temp->next;
+			if (temp->next) 
+				temp->next->prev = temp->prev;
+		}
+		
+		free(temp->data);
+		free(temp);
+		return SUCCESS;
 	}
-	pInfo->cpuUsage = ((double)processCpuUsed) / etcInfo->totalCpuUsed * 100.0 * etcInfo->number_of_processors;
+
+	pInfo->check = 0;
+	processCpuUsed = pInfo->cpuUsed - pInfo->beforeCpuUsed;
+	cpuUsage = ((double)processCpuUsed) / etcInfo->totalCpuUsed * 100.0 * etcInfo->number_of_processors;
 	pInfo->starttime = etcInfo->time - etcInfo->uptime + (pInfo->starttime / etcInfo->clk_tick);
 	strftime(pInfo->startString, sizeof(pInfo->startString), "%Y%m%d%H%M", localtime(&pInfo->starttime));
+
+	if (pInfo->beforeReadByte != -1) {
+		readBPS = (double)(pInfo->readByte - pInfo->beforeReadByte) / 1024 / etcInfo->sleepTime;
+		readIOPS = readBPS / etcInfo->blockSize;
+	}
+
+	if (pInfo->beforeWriteByte != -1) {
+		writeBPS = (double)(pInfo->writeByte - pInfo->beforeWriteByte) / 1024 / etcInfo->sleepTime;
+		writeIOPS = writeBPS / etcInfo->blockSize;
+	}
+
 
 	cData.time = &etcInfo->time;
 	cData.pName= pInfo->pName;
 	cData.pid = &pInfo->pid;
 	cData.ppid = &pInfo->ppid;
-	cData.cpuUsage = &pInfo->cpuUsage;
+	cData.cpuUsage = &cpuUsage;
 	cData.memory = &pInfo->memoryByte;
 	cData.createtime = &pInfo->starttime;
 	cData.ctimeStr = pInfo->startString;
 	cData.cmd2 = pInfo->cmd2;
 	cData.uName = pInfo->userName;
-
-	printCSVData(etcInfo->fp, separator);
+	cData.readIOPS = &readIOPS;
+	cData.writeIOPS = &writeIOPS;
+	cData.readBPS = &readBPS;
+	cData.writeBPS = &writeBPS;
+	printCSVData(etcInfo->fp, etcInfo->url, separator);
 	return SUCCESS;
 }
 
 int main () {
-	List_t *list[2] = {0, }; // before, now
+	LinkedList_t *list = initLinkedList(sizeof(ProcessInfo), compFunc);;
 	int index = 0;
 	ETC etc = {0, };
 	etc.number_of_processors = sysconf(_SC_NPROCESSORS_ONLN);
@@ -367,42 +431,54 @@ int main () {
 	uint64_t nowCpuTotalUsed;
 	uint64_t beforeCpuTotalUsed = 0;
 
+	char block[MAX_BUFF] = {0, };
+	FILE *fp;
 	ini_t *config = ini_load("config/config.ini");
 
-	const char *url = ini_get(config, "server", "url");
+	etc.url = ini_get(config, "server", "url");
 	const char *fileSavePath = ini_get(config, "agent", "fileSavePath");
 	const char *fileName = ini_get(config, "agent", "fileName");
 	const char *processName = ini_get(config, "agent", "process");
 
 	char fileFullName[128] = {0, };
 	char buff[2][32] = {{0, }, };
-	int sleepTime;
 	int min;
 	ini_sget(config, "agent", "separator", "'%c'", &etc.separator);
-	ini_sget(config, "agent", "sleep", "%d", &sleepTime);
+	ini_sget(config, "agent", "sleep", "%d", &etc.sleepTime);
 	ini_sget(config, "agent", "min", "%d", &min);
 
-	while (1) {
-		if (list[index] == NULL) {
-			list[index] = initList(sizeof(ProcessInfo), appendProcessFunc, compFunc);
-		}
+	snprintf(block, MAX_BUFF, "/sys/class/block/%s/queue/logical_block_size", ini_get(config,"agent", "disk"));
 
-		etc.beforeList = list[!index];
+	if ((fp = fopen(block, "r")) != NULL) {
+		fscanf(fp, "%lf", &etc.blockSize);
+		fclose(fp);
+		etc.blockSize /= 1024;
+		if (etc.blockSize == 0.0) {
+			printf("Check Permission Denied!\n");
+			exit(1);
+		}
+	} else {
+		printf("Check Config Disk Name!\n");
+		exit(1);
+	}
+
+
+	mkdir(fileSavePath, 0777);
+
+	while (1) {
 		etc.time = time(NULL);
 		etc.uptime = getUptime();
 
-		if (getProcessInfo(list[index], processName) == FAIL) {
-			printf("PID GET ERROR\n");
+		if (getProcessInfo(list, processName) == FAIL) {
+			printf("INFO GET ERROR\n");
 		}
 
 		if ((nowCpuTotalUsed = getCPUTotalUsed()) == FAIL) {
 			printf("CPU TOTAL USED ERROR\n");
 		}
+
 		etc.totalCpuUsed = nowCpuTotalUsed - beforeCpuTotalUsed;
 		beforeCpuTotalUsed = nowCpuTotalUsed;
-
-		mkdir(fileSavePath, 0777);
-
 
 		if (min == 0) {
 			strftime(buff[index], sizeof(buff[index]), "%Y%m%d", localtime(&etc.time));
@@ -411,9 +487,6 @@ int main () {
 		}
 
 		if (strncmp(buff[index], buff[!index], strlen(buff[index])) != 0) {
-			if (strlen(fileFullName) != 0) {
-				sendFile(url,fileFullName);
-			}
 			snprintf(fileFullName, sizeof(fileFullName), "%s/%s%s.csv", fileSavePath, fileName, buff[index]);
 		}
 
@@ -424,7 +497,7 @@ int main () {
 			etc.fp = fopen(fileFullName, "a");
 		}
 
-		if (circuitList(list[index], printProcessStat, &etc) == FAIL) {
+		if (circuitLinkedList(list, printProcessStat, &etc) == FAIL) {
 			printf("Process Stat Print ERROR\n");
 		}
 
@@ -432,12 +505,9 @@ int main () {
 
 		index = !index;
 
-		destroyList(list[index]);
-		list[index] = NULL;
-
-		sleep(sleepTime);
+		sleep(etc.sleepTime);
 	}
-
+	destroyLinkedList(list);
 	ini_free(config);
 	return SUCCESS;
 	
