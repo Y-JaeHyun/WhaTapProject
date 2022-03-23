@@ -14,3 +14,5 @@
   * 데비안10 (Kernal 5.10.17)
   * gcc version 8.3.0
   * python 2.7
+
+* agent는 io 체크를 위해 root권한이 필요함
