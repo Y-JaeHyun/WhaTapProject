@@ -12,3 +12,5 @@
 
 * Test 환경
   * 데비안10 (Kernal 5.10.17)
+  * gcc version 8.3.0
+  * python 2.7
